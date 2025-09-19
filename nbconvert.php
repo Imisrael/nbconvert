@@ -31,7 +31,11 @@ function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
       'method' => 'GET',
       'user_agent' => 'Bogus user agent',
       'timeout' => 1
-    )
+    ),
+    'ssl' => array(
+        'verify_peer' => false,
+        'verify_peer_name' => false,
+    ),
   );
 
   
@@ -57,7 +61,11 @@ function nbconvert_function($atts) {
         'method' => 'GET',
         'user_agent' => 'WordPress NbConvert Plugin',
         'timeout' => 15 
-    )
+    ),
+    'ssl' => array(
+        'verify_peer' => false,
+        'verify_peer_name' => false,
+    ),
   );
   $context = stream_context_create($context_params);
 
