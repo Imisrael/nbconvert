@@ -45,47 +45,28 @@ function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
   return $max_datetime_f;
 }
 
-/*
-function get_most_recent_git_change_for_file($url) {
-  
-  $url_list = explode('/', $url);
-  $url_list[5] = 'blame';
-  $new_url = implode("/", $url_list);
-  //Load the HTML page
-  $html = file_get_contents($new_url);
-  
-  //Create a new DOM document
-  $dom = new DOMDocument;
-  libxml_use_internal_errors(true);
-  $dom->loadHTML($html);
-  
-  // Get all time-ago tags
-  $time_agos = $dom->getElementsByTagName('time-ago');
-
-  $mostRecent= 0;
-  foreach($time_agos as $time_ago){
-    $datetime = $time_ago->getAttribute('datetime');
-    $curDate = strtotime($datetime);
-    if ($curDate > $mostRecent) {
-       $mostRecent = $curDate;
-    }
-  }
-
-  $max_date = date('d/m/Y H:i:s', $mostRecent);
-  return $max_date;
-  
-}
-*/
-
 function nbconvert_function($atts) {
   //process plugin
   extract(shortcode_atts(array(
         'url' => "",
      ), $atts));
 
+
+  $context_params = array(
+    'http' => array(
+        'method' => 'GET',
+        'user_agent' => 'WordPress NbConvert Plugin',
+        'timeout' => 15 
+    )
+  );
+  $context = stream_context_create($context_params);
+
   $clean_url = preg_replace('#^https?://#', '', rtrim($url,'/'));
-  $html = file_get_contents("https://nbviewer.jupyter.org/url/" . $clean_url);
-  $nb_output = nbconvert_getHTMLByID('notebook-container', $html);
+  $html = file_get_contents("https://nbviewer.jupyter.org/url/" . $clean_url, false, $context);
+  if ($html === false) {
+    return "";
+  }
+  $nb_output = nbconvert_getHTMLByClassName('jp-Notebook', $html);
 
   $last_update_date_time = nbconvert_get_most_recent_git_change_for_file_from_api($url);
 
@@ -115,11 +96,13 @@ function nbconvert_innerHTML(DOMNode $elm) {
   return $innerHTML;
 }
 
-function nbconvert_getHTMLByID($id, $html) {
+function nbconvert_getHTMLByClassName($classname, $html) {
     $dom = new DOMDocument;
     libxml_use_internal_errors(true);
     $dom->loadHTML($html);
-    $node = $dom->getElementById($id);
+    $finder = new DomXPath($dom);
+    $nodes = $finder->query("//body[contains(@class, '$classname')]");
+    $node = $nodes[0];
     if ($node) {
         $inner_output = nbconvert_innerHTML($node);
         return $inner_output;
