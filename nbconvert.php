@@ -14,6 +14,26 @@ function nbconvert_handler($atts) {
   return $nb_output;
 }
 
+
+function get_html_by_tag_name($tagname, $html) {
+    $dom = new DOMDocument;
+    libxml_use_internal_errors(true);
+    
+    $dom->loadHTML($html);
+    $nodes = $dom->getElementsByTagName($tagname);
+
+    if ($nodes->length > 0) {
+        $node = $nodes->item(0); 
+        $inner_output = nbconvert_innerHTML($node);
+        return $inner_output;
+    }
+
+    // Return false if the element wasn't found
+    return FALSE;
+}
+
+
+
 function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
 
   $url_list = explode('/', $url);
@@ -44,6 +64,7 @@ function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
   return $max_datetime_f;
 }
 
+
 function nbconvert_function($atts) {
   //process plugin
   extract(shortcode_atts(array(
@@ -65,7 +86,7 @@ function nbconvert_function($atts) {
   if ($html === false) {
     return "";
   }
-  $nb_output = nbconvert_getHTMLByClassName('jp-Notebook', $html);
+  $nb_output = get_html_by_tag_name('main', $html);
 
   $last_update_date_time = nbconvert_get_most_recent_git_change_for_file_from_api($url);
 
@@ -95,19 +116,7 @@ function nbconvert_innerHTML(DOMNode $elm) {
   return $innerHTML;
 }
 
-function nbconvert_getHTMLByClassName($classname, $html) {
-    $dom = new DOMDocument;
-    libxml_use_internal_errors(true);
-    $dom->loadHTML($html);
-    $finder = new DomXPath($dom);
-    $nodes = $finder->query("//body[contains(@class, '$classname')]");
-    $node = $nodes[0];
-    if ($node) {
-        $inner_output = nbconvert_innerHTML($node);
-        return $inner_output;
-    }
-    return FALSE;
-}
+
 
 function nbconvert_enqueue_style() {
 	wp_enqueue_style( 'NbConvert', plugins_url( '/css/nbconvert.css', __FILE__ ));
