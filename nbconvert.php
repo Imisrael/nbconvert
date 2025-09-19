@@ -31,6 +31,22 @@ function get_html_by_tag_name($tagname, $html) {
     return FALSE;
 }
 
+function nbconvert_innerHTML(DOMNode $elm) {
+  $innerHTML = '';
+  $children  = $elm->childNodes;
+
+  $h1Removed = false;
+
+  foreach($children as $child) {
+    if ($child->nodeName === 'h1' && !$h1Removed) {
+      $h1Removed = true;
+      continue;
+    }
+    $innerHTML .= $elm->ownerDocument->saveHTML($child);
+  }
+
+  return $innerHTML;
+}
 
 
 function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
@@ -104,22 +120,7 @@ function nbconvert_function($atts) {
   return $converted_nb;
 }
 
-function nbconvert_innerHTML(DOMNode $elm) {
-  $innerHTML = '';
-  $children  = $elm->childNodes;
 
-  $h1Removed = false;
-
-  foreach($children as $child) {
-    if ($child->nodeName === 'h1' & &!$h1Removed) {
-      $h1Removed = true;
-      continue;
-    }
-    $innerHTML .= $elm->ownerDocument->saveHTML($child);
-  }
-
-  return $innerHTML;
-}
 
 
 
