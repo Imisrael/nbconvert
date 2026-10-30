@@ -2,130 +2,145 @@
    /*
    Plugin Name: NbConvert Fixed
    Description: A plugin to add ipynb files to a blog post or page using nbviewer (updated)
-   Version: 1.1
+   Version: 1.2
    Author: Israel Imru
    License: MIT
    */
 
-function nbconvert_handler($atts) {
-  //run function that actually does the work of the plugin
-  $nb_output = nbconvert_function($atts);
-  //send back text to replace shortcode in post
-  return $nb_output;
+if ( ! defined( 'ABSPATH' ) ) {
+  exit;
 }
 
+// How long rendered notebooks stay cached (seconds).
+define( 'NBCONVERT_CACHE_TTL', 12 * HOUR_IN_SECONDS );
 
-function get_html_by_tag_name($tagname, $html) {
-    $dom = new DOMDocument;
-    libxml_use_internal_errors(true);
-    
-    $dom->loadHTML($html);
-    $nodes = $dom->getElementsByTagName($tagname);
-
-    if ($nodes->length > 0) {
-        $node = $nodes->item(0); 
-        $inner_output = nbconvert_innerHTML($node);
-        return $inner_output;
-    }
-
-    return FALSE;
+function nbconvert_handler( $atts ) {
+  return nbconvert_function( $atts );
 }
 
-function nbconvert_innerHTML(DOMNode $elm) {
+function get_html_by_tag_name( $tagname, $html ) {
+  $dom = new DOMDocument;
+  libxml_use_internal_errors( true );
+  $dom->loadHTML( $html );
+  libxml_clear_errors();
+
+  $nodes = $dom->getElementsByTagName( $tagname );
+  if ( $nodes->length > 0 ) {
+    return nbconvert_innerHTML( $nodes->item( 0 ) );
+  }
+  return false;
+}
+
+function nbconvert_innerHTML( DOMNode $elm ) {
   $innerHTML = '';
-  $children  = $elm->childNodes;
-
   $h1Removed = false;
 
-  foreach($children as $child) {
-    if ($child->nodeName === 'h1' && !$h1Removed) {
+  foreach ( $elm->childNodes as $child ) {
+    if ( $child->nodeName === 'h1' && ! $h1Removed ) {
       $h1Removed = true;
       continue;
     }
-    $innerHTML .= $elm->ownerDocument->saveHTML($child);
+    $innerHTML .= $elm->ownerDocument->saveHTML( $child );
   }
-
   return $innerHTML;
 }
 
-
-function nbconvert_get_most_recent_git_change_for_file_from_api($url) {
-
-  $url_list = explode('/', $url);
-
-  $owner = $url_list[3];
-  $repo = $url_list[4];
-  $branch = $url_list[6];
-  $path = implode("/", array_slice($url_list, 7));
-
-  $request_url = 'https://api.github.com/repos/'.$owner.'/'.$repo.'/commits/'.$branch.'?path='. $path.'&page=1';
-
-  $context_params = array(
-    'http' => array(
-      'method' => 'GET',
-      'user_agent' => 'Bogus user agent',
-      'timeout' => 1
-    )
+// Only allow github.com/<owner>/<repo>/blob/<branch>/<path>.ipynb
+function nbconvert_parse_github_url( $url ) {
+  $parts = wp_parse_url( $url );
+  if ( empty( $parts['host'] ) || strtolower( $parts['host'] ) !== 'github.com' ) {
+    return false;
+  }
+  $segments = explode( '/', trim( $parts['path'] ?? '', '/' ) );
+  if ( count( $segments ) < 5 || $segments[2] !== 'blob' ) {
+    return false;
+  }
+  return array(
+    'owner'  => $segments[0],
+    'repo'   => $segments[1],
+    'branch' => $segments[3],
+    'path'   => implode( '/', array_slice( $segments, 4 ) ),
   );
-
-  
-  $res = file_get_contents($request_url, FALSE, stream_context_create($context_params));
-
-  $datetime = json_decode($res, true)['commit']['committer']['date'];
-
-  $max_datetime = strtotime($datetime);
-  $max_datetime_f = date('d/m/Y H:i:s', $max_datetime);
-
-  return $max_datetime_f;
 }
 
-
-function nbconvert_function($atts) {
-  //process plugin
-  extract(shortcode_atts(array(
-        'url' => "",
-     ), $atts));
-
-
-  $context_params = array(
-    'http' => array(
-        'method' => 'GET',
-        'user_agent' => 'WordPress NbConvert Plugin',
-        'timeout' => 15 
-    )
+function nbconvert_get_last_commit_date( $gh ) {
+  $request_url = sprintf(
+    'https://api.github.com/repos/%s/%s/commits/%s?path=%s',
+    rawurlencode( $gh['owner'] ),
+    rawurlencode( $gh['repo'] ),
+    rawurlencode( $gh['branch'] ),
+    rawurlencode( $gh['path'] )
   );
-  $context = stream_context_create($context_params);
 
-  $clean_url = preg_replace('#^https?://#', '', rtrim($url,'/'));
-  $html = file_get_contents("https://nbviewer.jupyter.org/url/" . $clean_url, false, $context);
-  if ($html === false) {
-    return "";
+  $res = wp_remote_get( $request_url, array(
+    'timeout'    => 5,
+    'user-agent' => 'WordPress NbConvert Plugin',
+  ) );
+  if ( is_wp_error( $res ) || wp_remote_retrieve_response_code( $res ) !== 200 ) {
+    return '';
   }
-  $nb_output = get_html_by_tag_name('main', $html);
 
-  $last_update_date_time = nbconvert_get_most_recent_git_change_for_file_from_api($url);
+  $data = json_decode( wp_remote_retrieve_body( $res ), true );
+  $datetime = $data['commit']['committer']['date'] ?? '';
+  if ( ! $datetime ) {
+    return '';
+  }
+  return date( 'd/m/Y H:i:s', strtotime( $datetime ) );
+}
+
+function nbconvert_function( $atts ) {
+  $atts = shortcode_atts( array( 'url' => '' ), $atts );
+  $url  = esc_url_raw( trim( $atts['url'] ) );
+
+  $gh = nbconvert_parse_github_url( $url );
+  if ( ! $gh ) {
+    return '<!-- nbconvert: invalid or non-GitHub URL -->';
+  }
+
+  $cache_key = 'nbconvert_' . md5( $url );
+  $cached = get_transient( $cache_key );
+  if ( $cached !== false ) {
+    return $cached;
+  }
+
+  $clean_url = preg_replace( '#^https?://#', '', rtrim( $url, '/' ) );
+  $res = wp_remote_get( 'https://nbviewer.jupyter.org/url/' . $clean_url, array(
+    'timeout'    => 15,
+    'user-agent' => 'WordPress NbConvert Plugin',
+  ) );
+  if ( is_wp_error( $res ) || wp_remote_retrieve_response_code( $res ) !== 200 ) {
+    // Short negative cache so a dead nbviewer doesn't hammer every page load.
+    set_transient( $cache_key, '', 10 * MINUTE_IN_SECONDS );
+    return '';
+  }
+
+  $nb_output = get_html_by_tag_name( 'main', wp_remote_retrieve_body( $res ) );
+  if ( $nb_output === false ) {
+    return '';
+  }
+
+  $last_update = nbconvert_get_last_commit_date( $gh );
+  $updated_label = $last_update
+    ? '<label class="github-last-update"> Last updated: ' . esc_html( $last_update ) . '</label>'
+    : '';
 
   $converted_nb = '<div class="notebook">
-    <div class="nbconvert">'.$nb_output.'
+    <div class="nbconvert">' . $nb_output . '
     </div>
     <div class="nbconvert-labels">
       <label class="github-link">
-        <a href="'.$url.'" target="_blank">Also available on Github</a>
-        <label class="github-last-update"> Last updated: '.$last_update_date_time.'</label>
+        <a href="' . esc_url( $url ) . '" target="_blank" rel="noopener noreferrer">Also available on Github</a>
+        ' . $updated_label . '
       </label>
-      </div>
+    </div>
   </div>';
 
-  //send back text to calling function
+  set_transient( $cache_key, $converted_nb, NBCONVERT_CACHE_TTL );
   return $converted_nb;
 }
 
-
-
-
-
 function nbconvert_enqueue_style() {
-	wp_enqueue_style( 'NbConvert', plugins_url( '/css/nbconvert.css', __FILE__ ));
+  wp_enqueue_style( 'NbConvert', plugins_url( '/css/nbconvert.css', __FILE__ ) );
 }
 add_action( 'wp_enqueue_scripts', 'nbconvert_enqueue_style' );
-add_shortcode("nbconvert", "nbconvert_handler");
+add_shortcode( 'nbconvert', 'nbconvert_handler' );
